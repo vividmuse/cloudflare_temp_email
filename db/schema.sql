@@ -4,19 +4,34 @@ CREATE TABLE IF NOT EXISTS raw_mails (
     source TEXT,
     address TEXT,
     raw TEXT,
+    raw_blob BLOB,
+    metadata TEXT,
+    is_unread INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_raw_mails_address ON raw_mails(address);
 
+CREATE INDEX IF NOT EXISTS idx_raw_mails_created_at ON raw_mails(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_raw_mails_message_id ON raw_mails(message_id);
+
 CREATE TABLE IF NOT EXISTS address (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE,
+    password TEXT,
+    source_meta TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_address_name ON address(name);
+
+CREATE INDEX IF NOT EXISTS idx_address_created_at ON address(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_address_updated_at ON address(updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_address_source_meta ON address(source_meta);
 
 CREATE TABLE IF NOT EXISTS auto_reply_mails (
     id INTEGER PRIMARY KEY,
@@ -49,6 +64,8 @@ CREATE TABLE IF NOT EXISTS sendbox (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sendbox_address ON sendbox(address);
+
+CREATE INDEX IF NOT EXISTS idx_sendbox_created_at ON sendbox(created_at);
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -103,3 +120,19 @@ CREATE TABLE IF NOT EXISTS user_passkeys (
 CREATE INDEX IF NOT EXISTS idx_user_passkeys_user_id ON user_passkeys(user_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_passkeys_user_id_passkey_id ON user_passkeys(user_id, passkey_id);
+
+CREATE TABLE IF NOT EXISTS redeem_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    redeem_type TEXT NOT NULL,
+    value TEXT NOT NULL,
+    result TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    redeemed INTEGER NOT NULL DEFAULT 0 CHECK (redeemed IN (0, 1)),
+    expires_at DATETIME NOT NULL,
+    redeemed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_redeem_codes_type ON redeem_codes(redeem_type);

@@ -1,15 +1,15 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { ref, onMounted, computed, watch } from 'vue'
+import { useScopedI18n } from '@/i18n/app'
 import { useRouter } from 'vue-router'
-import { NewLabelOutlined, EmailOutlined } from '@vicons/material'
+import { NewLabelOutlined, EmailOutlined, RedeemOutlined } from '@vicons/material'
 
 import AdminContact from '../common/AdminContact.vue'
 import Turnstile from '../../components/Turnstile.vue'
 
 import { useGlobalState } from '../../store'
 import { api } from '../../api'
-import { getRouterPathWithLang } from '../../utils'
+import { getRouterPathWithLang, hashPassword } from '../../utils'
 
 const props = defineProps({
     bindUserAddress: {
@@ -19,13 +19,14 @@ const props = defineProps({
     },
     newAddressPath: {
         type: Function,
-        default: async (address_name, domain, cf_token) => {
+        default: async (address_name, domain, cf_token, enableRandomSubdomain) => {
             return await api.fetch("/api/new_address", {
                 method: "POST",
                 body: JSON.stringify({
                     name: address_name,
                     domain: domain,
                     cf_token: cf_token,
+                    enableRandomSubdomain: enableRandomSubdomain,
                 }),
             });
         },
@@ -39,7 +40,7 @@ const router = useRouter()
 
 const {
     jwt, loading, openSettings,
-    showAddressCredential, userSettings
+    showAddressCredential, userSettings, addressPassword
 } = useGlobalState()
 
 const tabValue = ref('signin')
@@ -47,13 +48,65 @@ const credential = ref('')
 const emailName = ref("")
 const emailDomain = ref("")
 const cfToken = ref("")
+const subdomainMode = ref("normal")
+const customSubdomain = ref("")
+const loginCfToken = ref("")
+const loginTurnstileRef = ref(null)
+const loginMethod = ref('credential') // 'credential' or 'password'
+const loginAddress = ref('')
+const loginPassword = ref('')
+
+// 根据 openSettings 初始化登录方式
+const initLoginMethod = () => {
+    if (openSettings.value?.enableAddressPassword) {
+        loginMethod.value = 'password';
+    } else {
+        loginMethod.value = 'credential';
+    }
+}
 
 const login = async () => {
+    if (loginMethod.value === 'password') {
+        // Password login
+        if (!loginAddress.value || !loginPassword.value) {
+            message.error(t('emailPasswordRequired'));
+            return;
+        }
+        try {
+            const res = await api.fetch('/api/address_login', {
+                method: 'POST',
+                body: JSON.stringify({
+                    email: loginAddress.value,
+                    password: await hashPassword(loginPassword.value),
+                    cf_token: loginCfToken.value
+                })
+            });
+            jwt.value = res.jwt;
+            await api.getSettings();
+            try {
+                await props.bindUserAddress();
+            } catch (error) {
+                message.error(`${t('bindUserAddressError')}: ${error.message}`);
+            }
+            await router.push(getRouterPathWithLang("/", locale.value));
+        } catch (error) {
+            message.error(error.message || "error");
+            loginTurnstileRef.value?.refresh?.();
+        }
+        return;
+    }
     if (!credential.value) {
         message.error(t('credentialInput'));
         return;
     }
     try {
+        await api.fetch('/open_api/credential_login', {
+            method: 'POST',
+            body: JSON.stringify({
+                credential: credential.value,
+                cf_token: loginCfToken.value
+            })
+        });
         jwt.value = credential.value;
         await api.getSettings();
         try {
@@ -64,45 +117,11 @@ const login = async () => {
         await router.push(getRouterPathWithLang("/", locale.value));
     } catch (error) {
         message.error(error.message || "error");
+        loginTurnstileRef.value?.refresh?.();
     }
 }
 
-const { locale, t } = useI18n({
-    messages: {
-        en: {
-            login: 'Login',
-            loginAndBind: 'Login and Bind',
-            pleaseGetNewEmail: 'Please login or click "Get New Email" button to get a new email address',
-            getNewEmail: 'Create New Email',
-            getNewEmailTip1: 'Please input the email you want to use. only allow: ',
-            getNewEmailTip2: 'Levaing it blank will generate a random email address.',
-            getNewEmailTip3: 'You can choose a domain from the dropdown list.',
-            credential: 'Email Address Credential',
-            ok: 'OK',
-            generateName: 'Generate Fake Name',
-            help: 'Help',
-            credentialInput: 'Please input the Mail Address Credential',
-            bindUserInfo: 'Logged in user, login without binding email or create new email address will bind to current user',
-            bindUserAddressError: 'Error when bind email address to user',
-        },
-        zh: {
-            login: '登录',
-            loginAndBind: '登录并绑定',
-            pleaseGetNewEmail: '请"登录"或点击 "注册新邮箱" 按钮来获取一个新的邮箱地址',
-            getNewEmail: '创建新邮箱',
-            getNewEmailTip1: '请输入你想要使用的邮箱地址, 只允许: ',
-            getNewEmailTip2: '留空将会生成一个随机的邮箱地址。',
-            getNewEmailTip3: '你可以从下拉列表中选择一个域名。',
-            credential: '邮箱地址凭据',
-            ok: '确定',
-            generateName: '生成随机名字',
-            help: '帮助',
-            credentialInput: '请输入邮箱地址凭据',
-            bindUserInfo: '已登录用户, 登录未绑定邮箱或创建新邮箱地址将绑定到当前用户',
-            bindUserAddressError: '绑定邮箱地址到用户时错误',
-        }
-    }
-});
+const { locale, t } = useScopedI18n('views.common.Login')
 
 const loginAndBindTag = computed(() => {
     if (userSettings.value.user_email) {
@@ -147,12 +166,19 @@ const generateName = async () => {
 
 const newEmail = async () => {
     try {
+        // If custom names are disabled, send empty name to trigger backend auto-generation
+        const nameToSend = openSettings.value.disableCustomAddressName ? "" : emailName.value;
+        const domainToSend = subdomainMode.value === "custom"
+            ? `${customSubdomain.value.trim()}.${emailDomain.value}`
+            : emailDomain.value;
         const res = await props.newAddressPath(
-            emailName.value,
-            emailDomain.value,
-            cfToken.value
+            nameToSend,
+            domainToSend,
+            cfToken.value,
+            subdomainMode.value === "random"
         );
         jwt.value = res["jwt"];
+        addressPassword.value = res["password"] || '';
         await api.getSettings();
         await router.push(getRouterPathWithLang("/", locale.value));
         showAddressCredential.value = true;
@@ -166,6 +192,10 @@ const newEmail = async () => {
     }
 };
 
+const openRedeemPage = async () => {
+    await router.push(getRouterPathWithLang('/redeem', locale.value));
+};
+
 const addressPrefix = computed(() => {
     // if user has role, return role prefix
     if (userSettings.value?.user_role) {
@@ -173,6 +203,19 @@ const addressPrefix = computed(() => {
     }
     // if user has no role, return default prefix
     return openSettings.value.prefix;
+});
+
+const canUseRandomSubdomain = computed(() => {
+    if (!emailDomain.value) {
+        return false;
+    }
+    return (openSettings.value.randomSubdomainDomains || []).includes(emailDomain.value);
+});
+
+watch(canUseRandomSubdomain, (enabled) => {
+    if (!enabled) {
+        subdomainMode.value = "normal";
+    }
 });
 
 const domainsOptions = computed(() => {
@@ -208,6 +251,7 @@ onMounted(async () => {
         await api.getOpenSettings(message, notification);
     }
     emailDomain.value = domainsOptions.value ? domainsOptions.value[0]?.value : "";
+    initLoginMethod();
 });
 </script>
 
@@ -219,9 +263,33 @@ onMounted(async () => {
         <n-tabs v-if="openSettings.fetched" v-model:value="tabValue" size="large" justify-content="space-evenly">
             <n-tab-pane name="signin" :tab="loginAndBindTag">
                 <n-form>
-                    <n-form-item-row :label="t('credential')" required>
-                        <n-input v-model:value="credential" type="textarea" :autosize="{ minRows: 3 }" />
-                    </n-form-item-row>
+                    <div v-if="loginMethod === 'password'">
+                        <n-form-item-row :label="t('email')" required>
+                            <n-input v-model:value="loginAddress" />
+                        </n-form-item-row>
+                        <n-form-item-row :label="t('password')" required>
+                            <n-input v-model:value="loginPassword" type="password" show-password-on="click"
+                                @keyup.enter="login" />
+                        </n-form-item-row>
+                    </div>
+
+                    <div v-else>
+                        <n-form-item-row :label="t('credential')" required>
+                            <n-input v-model:value="credential" type="textarea" :autosize="{ minRows: 3 }" />
+                        </n-form-item-row>
+                    </div>
+
+                    <Turnstile ref="loginTurnstileRef" v-if="openSettings.enableGlobalTurnstileCheck"
+                        v-model:value="loginCfToken" />
+
+                    <div class="switch-login-button">
+                        <n-button v-if="openSettings?.enableAddressPassword"
+                            @click="loginMethod === 'password' ? loginMethod = 'credential' : loginMethod = 'password'"
+                            type="info" quaternary size="tiny">
+                            {{ loginMethod === 'password' ? t('credentialLogin') : t('passwordLogin') }}
+                        </n-button>
+                    </div>
+
                     <n-button @click="login" :loading="loading" type="primary" block secondary strong>
                         <template #icon>
                             <n-icon :component="EmailOutlined" />
@@ -234,36 +302,79 @@ onMounted(async () => {
                         </template>
                         {{ t('getNewEmail') }}
                     </n-button>
+                    <div v-if="openSettings.enableRedeemCode" class="redeem-entry-section">
+                        <n-divider />
+                        <n-text type="info" class="redeem-entry-tip">{{ t('redeemEntryTip') }}</n-text>
+                        <n-button data-testid="redeem-entry" block secondary strong @click="openRedeemPage">
+                            <template #icon>
+                                <n-icon :component="RedeemOutlined" />
+                            </template>
+                            {{ t('useRedeemCode') }}
+                        </n-button>
+                    </div>
                 </n-form>
             </n-tab-pane>
             <n-tab-pane v-if="showNewAddressTab" name="register" :tab="t('getNewEmail')">
                 <n-spin :show="generateNameLoading">
                     <n-form>
                         <span>
-                            <p>{{ t("getNewEmailTip1") + addressRegex.source }}</p>
-                            <p>{{ t("getNewEmailTip2") }}</p>
+                            <p v-if="!openSettings.disableCustomAddressName">{{ t("getNewEmailTip1") +
+                                addressRegex.source }}</p>
+                            <p v-if="!openSettings.disableCustomAddressName">{{ t("getNewEmailTip2") }}</p>
                             <p>{{ t("getNewEmailTip3") }}</p>
                         </span>
-                        <n-button @click="generateName" style="margin-bottom: 10px;">
+                        <n-button v-if="!openSettings.disableCustomAddressName" @click="generateName"
+                            style="margin-bottom: 10px;">
                             {{ t('generateName') }}
                         </n-button>
                         <n-input-group>
                             <n-input-group-label v-if="addressPrefix">
                                 {{ addressPrefix }}
                             </n-input-group-label>
-                            <n-input v-model:value="emailName" show-count :minlength="openSettings.minAddressLen"
-                                :maxlength="openSettings.maxAddressLen" />
+                            <n-input v-if="!openSettings.disableCustomAddressName" v-model:value="emailName" show-count
+                                :minlength="openSettings.minAddressLen" :maxlength="openSettings.maxAddressLen" />
+                            <n-input v-else :value="t('autoGeneratedName')" disabled />
                             <n-input-group-label>@</n-input-group-label>
                             <n-select v-model:value="emailDomain" :consistent-menu-width="false"
                                 :options="domainsOptions" />
                         </n-input-group>
+                        <n-form-item-row v-if="canUseRandomSubdomain">
+                            <div style="width: 100%;">
+                                <n-radio-group v-model:value="subdomainMode">
+                                    <n-space vertical>
+                                        <n-radio value="normal">{{ t('normalSubdomain') }}</n-radio>
+                                        <n-radio value="random">{{ t('enableRandomSubdomain') }}</n-radio>
+                                        <n-radio value="custom">{{ t('enableCustomSubdomain') }}</n-radio>
+                                    </n-space>
+                                </n-radio-group>
+                                <p v-if="subdomainMode === 'random'" style="margin: 8px 0 0; opacity: 0.75;">
+                                    {{ t('randomSubdomainTip') }}
+                                </p>
+                                <n-input-group v-if="subdomainMode === 'custom'" style="margin-top: 8px;">
+                                    <n-input v-model:value="customSubdomain" />
+                                    <n-input-group-label>.{{ emailDomain }}</n-input-group-label>
+                                </n-input-group>
+                            </div>
+                        </n-form-item-row>
                         <Turnstile v-model:value="cfToken" />
-                        <n-button type="primary" block secondary strong @click="newEmail" :loading="loading">
+                        <n-button type="primary" block secondary strong @click="newEmail" :loading="loading"
+                            :disabled="subdomainMode === 'custom' && !customSubdomain.trim()">
                             <template #icon>
                                 <n-icon :component="NewLabelOutlined" />
                             </template>
                             {{ t('getNewEmail') }}
                         </n-button>
+                        <div v-if="openSettings.enableRedeemCode" class="redeem-entry-section">
+                            <n-divider />
+                            <n-text type="info" class="redeem-entry-tip">{{ t('redeemEntryTip') }}</n-text>
+                            <n-button data-testid="redeem-entry-register" block secondary strong
+                                @click="openRedeemPage">
+                                <template #icon>
+                                    <n-icon :component="RedeemOutlined" />
+                                </template>
+                                {{ t('useRedeemCode') }}
+                            </n-button>
+                        </div>
                     </n-form>
                 </n-spin>
             </n-tab-pane>
@@ -287,6 +398,27 @@ onMounted(async () => {
 
 .n-form .n-button {
     margin-top: 10px;
+}
+
+.redeem-entry-section {
+    margin-top: 18px;
+}
+
+.redeem-entry-section :deep(.n-divider) {
+    margin: 0 0 14px;
+}
+
+.redeem-entry-tip {
+    display: block;
+    font-size: 13px;
+    line-height: 1.6;
+    text-align: center;
+}
+
+.switch-login-button {
+    display: flex;
+    justify-content: center;
+    margin: 10px 0;
 }
 
 .n-form {

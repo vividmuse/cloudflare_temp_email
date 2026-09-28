@@ -1,24 +1,24 @@
 import { Context } from "hono";
 
 import i18n from "../i18n";
-import { HonoCustomType } from "../types";
 import { UserOauth2Settings, UserSettings } from "../models";
 import { getJsonSetting, getUserRoles } from "../utils"
 import { CONSTANTS } from "../constants";
-import { commonGetUserRole } from "../common";
+import { commonGetUserRole, updateUserAddressesUpdatedAt } from "../common";
 import { Jwt } from "hono/utils/jwt";
 
 export default {
     openSettings: async (c: Context<HonoCustomType>) => {
         const value = await getJsonSetting(c, CONSTANTS.USER_SETTINGS_KEY);
         const settings = new UserSettings(value);
-        const oauth2ClientIDs = [] as { clientID: string, name: string }[];
+        const oauth2ClientIDs = [] as { clientID: string, name: string, icon?: string }[];
         try {
             const oauth2Settings = await getJsonSetting<UserOauth2Settings[]>(c, CONSTANTS.OAUTH2_SETTINGS_KEY);
             oauth2ClientIDs.push(
                 ...oauth2Settings?.map(s => ({
                     clientID: s.clientID,
-                    name: s.name
+                    name: s.name,
+                    icon: s.icon,
                 })) || []
             );
         } catch (e) {
@@ -32,8 +32,7 @@ export default {
     },
     settings: async (c: Context<HonoCustomType>) => {
         const user = c.get("userPayload");
-        const lang = c.get("lang") || c.env.DEFAULT_LANG;
-        const msgs = i18n.getMessages(lang);
+        const msgs = i18n.getMessagesbyContext(c);
         // check if user exists
         const db_user_id = await c.env.DB.prepare(
             `SELECT id FROM users where id = ?`
@@ -55,10 +54,22 @@ export default {
             // 1 hour
             exp: Math.floor(Date.now() / 1000) + 3600,
         }, c.env.JWT_SECRET, "HS256") : null;
+        // create new if expired in 7 days
+        const new_user_token = user.exp > (
+            Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
+        ) ? null : await Jwt.sign({
+            user_email: user.user_email,
+            user_id: user.user_id,
+            // 30 days expire in seconds
+            exp: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+            iat: Math.floor(Date.now() / 1000),
+        }, c.env.JWT_SECRET, "HS256");
+        updateUserAddressesUpdatedAt(c, user.user_id);
         return c.json({
             ...user,
             is_admin: is_admin,
             access_token: access_token,
+            new_user_token: new_user_token,
             user_role: user_role
         });
     },

@@ -1,6 +1,5 @@
 <script setup>
 import { onMounted, ref } from 'vue';
-import { useI18n } from 'vue-i18n'
 
 import { useGlobalState } from '../../store'
 import { api } from '../../api'
@@ -26,7 +25,7 @@ onMounted(async () => {
 
 <template>
     <div class="center">
-        <n-card :bordered="false" embedded style="max-width: 600px; overflow: auto;">
+        <n-card :bordered="false" embedded style="max-width: 800px; overflow: auto;">
             <pre>{{ JSON.stringify(settings, null, 2) }}</pre>
         </n-card>
     </div>

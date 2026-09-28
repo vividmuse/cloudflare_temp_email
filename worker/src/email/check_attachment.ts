@@ -1,4 +1,3 @@
-import { Bindings, ParsedEmailContext } from "../types";
 import { getBooleanValue } from "../utils";
 import { commonParseMail } from "../common";
 import { createMimeMessage } from "mimetext";
@@ -49,4 +48,8 @@ export const remove_attachment_if_need = async (
         });
     }
     parsedEmailContext.rawEmail = msg.asRaw();
+    parsedEmailContext.parsedEmail = {
+        ...parsedEmail,
+        attachments: [],
+    };
 }

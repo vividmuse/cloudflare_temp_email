@@ -1,4 +1,7 @@
-# Cloudflare workers 后端
+# Cloudflare Worker 后端
+
+> [!warning] 注意
+> `worker.dev` 域名在中国无法访问，请自定义域名
 
 ## 初始化项目
 
@@ -32,9 +35,17 @@ compatibility_date = "2024-09-23"
 compatibility_flags = [ "nodejs_compat" ]
 
 # 如果你想使用自定义域名，你需要添加 routes 配置
+# 将 pattern 替换为你自己的域名，该域名需要已添加到你的 Cloudflare 账户中
+# 配置后 Worker 将通过该自定义域名提供服务，而非默认的 *.workers.dev 域名
 # routes = [
 #  { pattern = "temp-email-api.xxxxx.xyz", custom_domain = true },
 # ]
+
+# 如果你想要部署带有前端资源的 worker, 你需要添加 assets 配置
+# [assets]
+# directory = "../frontend/dist/"
+# binding = "ASSETS"
+# run_worker_first = true
 
 # 如果你想要使用定时任务清理邮件，取消下面的注释，并修改 cron 表达式
 # [triggers]
@@ -50,11 +61,14 @@ compatibility_flags = [ "nodejs_compat" ]
 PREFIX = "tmp"
 # 用于临时邮箱的所有域名, 支持多个域名
 DOMAINS = ["xxx.xxx1" , "xxx.xxx2"]
-# 用于生成 jwt 的密钥, jwt 用于给用户登录以及鉴权
+# 用于签名 JWT 的密钥，JWT 用于登录鉴权
+# 请使用随机字符串，例如通过 openssl rand -hex 32 生成
 JWT_SECRET = "xxx"
 
 # admin 控制台密码, 不配置则不允许访问控制台
 # ADMIN_PASSWORDS = ["123", "456"]
+# Admin API IP 白名单，同时限制管理员密码和 Admin 用户令牌访问
+# ADMIN_API_IP_WHITELIST = ["203.0.113.10"]
 
 # 是否允许用户创建邮件, 不配置则不允许
 ENABLE_USER_CREATE_EMAIL = true
@@ -84,6 +98,29 @@ database_id = "xxx" # D1 数据库 ID
 # [[services]]
 # binding = "AUTH_INBOX"
 # service = "auth-inbox"
+```
+
+## 部署带有前端页面的 worker(可选)
+
+> [!NOTE]
+> 如果不需要 [带有前端页面的 worker]，可以跳过此步骤
+> 参考之后部署前端文档，可以进行前后端分离部署
+
+确认已构建前端资源到 `frontend/dist` 目录
+
+```bash
+cd frontend
+pnpm install --no-frozen-lockfile
+pnpm build:pages
+```
+
+`worker` 目录下的 `wrangler.toml` 文件中添加下面的配置
+
+```toml
+[assets]
+directory = "../frontend/dist/"
+binding = "ASSETS"
+run_worker_first = true
 ```
 
 ## Telegram Bot 配置
